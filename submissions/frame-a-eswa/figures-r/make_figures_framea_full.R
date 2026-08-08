@@ -3,7 +3,7 @@
 # Run from submissions/frame-a-eswa/
 
 suppressPackageStartupMessages({
-  library(jsonlite); library(ggplot2); library(dplyr); library(patchwork); library(tikzDevice)
+  library(jsonlite); library(ggplot2); library(ggrepel); library(dplyr); library(patchwork); library(tikzDevice)
 })
 
 HARNESS <- "../../edit-harness"
@@ -45,6 +45,8 @@ load_mix <- function(mix_name) {
       exposure    = as.numeric(if (is.list(c_raw)) c_raw$exposure_surface_mean else NA_real_),
       recall_lift = as.numeric(if (is.list(disc_raw)) disc_raw$lift else NA_real_),
       edit_on_priv = as.numeric(if (is.list(d$discovery)) disc_raw$lift else NA_real_),
+      has_runner_stamp = !is.null(d$runner_stamp) &&
+        isTRUE(as.integer(d$runner_stamp$stamp_version) >= 1L),
       stringsAsFactors = FALSE
     )
   })
@@ -54,20 +56,27 @@ load_mix <- function(mix_name) {
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
 mix_all <- rbind(load_mix("MIX_A"), load_mix("MIX_B"), load_mix("MIX_C"))
-mix_all$policy <- gsub("_", "-", mix_all$policy)
-mix_all$mix_lab <- factor(gsub("_", "\\\\_", mix_all$mix), levels=c("MIX\\\\_A","MIX\\\\_B","MIX\\\\_C"))
+POLICY_LEVELS <- c("oracle","always-grace","both","always-rag","always-edit","always-ft",
+                   "ft-merge","cost-only","damage-only","always-reject","random")
+mix_all$policy <- factor(gsub("_", "-", mix_all$policy), levels=POLICY_LEVELS)
 mix_all$mix <- factor(mix_all$mix, levels=c("MIX_A","MIX_B","MIX_C"))
+# Prose stream names for all reader-facing labels (data keys stay MIX_*).
+# MIX_A = steady maintenance; MIX_B = higher-churn maintenance;
+# MIX_C = privacy/footprint-tagged maintenance (matches caption + P2 privacy artifact).
+MIX_PROSE <- c("MIX_A"="steady", "MIX_B"="higher-churn", "MIX_C"="privacy-tagged")
+mix_all$mix_lab <- factor(mix_all$mix, levels=c("MIX_A","MIX_B","MIX_C"),
+                          labels=unname(MIX_PROSE))
 POLICY_COLS <- setNames(
   c("#2CA02C","#1F77B4","#AEC7E8","#D62728","#FF7F0E","#9467BD",
     "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF"),
-  c("oracle","always-grace","both","always-rag","always-edit","always-ft",
-    "ft-merge","cost-only","damage-only","always-reject","random")
+  POLICY_LEVELS
 )
-MIX_COLS <- c("MIX\\\\_A"="#66A61F", "MIX\\\\_B"="#D89000", "MIX\\\\_C"="#1B9E77")
+MIX_COLS <- setNames(c("#66A61F", "#D89000", "#1B9E77"), unname(MIX_PROSE))
+MIX_LABELS <- MIX_PROSE
 
 cat(sprintf("Total cells loaded: %d (mix=%d)\n", nrow(mix_all), length(unique(mix_all$mix))))
 
-write_tex <- function(plot, path, source_json, width=6.5, height=5) {
+write_tex <- function(plot, path, source_json, width=5.40, height=5) {
   tikz(path, width=width, height=height, standAlone=FALSE)
   print(plot); dev.off()
   lines <- readLines(path, warn=FALSE)
@@ -92,38 +101,42 @@ pt <- theme_minimal(base_size=8) +
               cost_mean=mean(total_gpu_s,na.rm=TRUE), cost_sd=sd(total_gpu_s,na.rm=TRUE),
               .groups="drop")
 
-  pa <- ggplot(summ, aes(x=cost_mean/3600, y=Q_mean, colour=policy)) +
+  pa <- ggplot(summ, aes(x=cost_mean, y=Q_mean, colour=policy)) +
     geom_point(size=2.2) +
-    facet_wrap(~mix_lab, nrow=1, labeller=as_labeller(c(MIX_A="MIX\\_A", MIX_B="MIX\\_B", MIX_C="MIX\\_C"))) +
+    facet_wrap(~mix_lab, nrow=1) +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
-    labs(x="Mean cost (GPU-h)", y="Mean quality Q") + pt
+    scale_x_continuous(breaks=c(0,150,300)) +
+    labs(x="Mean cost (GPU-s)", y="Mean quality Q") + pt +
+    theme(axis.text.x=element_text(size=6),
+          strip.text=element_text(size=5.2, lineheight=0.9),
+          strip.clip="off")
 
   # Panel b: combined three-mix Pareto with always_grace highlighted
-  pb <- ggplot(summ, aes(x=cost_mean/3600, y=Q_mean, colour=mix_lab)) +
+  pb <- ggplot(summ, aes(x=cost_mean, y=Q_mean, colour=mix_lab)) +
     geom_point(size=2.2, alpha=0.85) +
     geom_point(data=summ[summ$policy=="always-grace",],
                colour="#1F77B4", size=4, shape=17) +
-    scale_colour_manual(values=MIX_COLS, name="Mix",
-                        breaks=c("MIX_A","MIX_B","MIX_C"),
-                        labels=c("MIX\\_A","MIX\\_B","MIX\\_C")) +
-    labs(x="Mean cost (GPU-h)", y="Mean quality Q") + pt +
+    scale_colour_manual(values=MIX_COLS, name="Mix") +
+    labs(x="Mean cost (GPU-s)", y="Mean quality Q") + pt +
     theme(legend.position="right")
 
-  # Panel c: cost-quality ratio (Q/GPU-h) by policy × mix
-  summ$qperh <- summ$Q_mean / pmax(summ$cost_mean/3600, 1e-9)
-  pc <- ggplot(summ, aes(x=reorder(policy,-qperh), y=qperh, fill=mix_lab)) +
+  # Panel c: cost-quality ratio (Q/GPU-s) by policy × mix
+  summ$qperh <- summ$Q_mean / pmax(summ$cost_mean, 1e-9)
+  pc <- ggplot(summ, aes(x=policy, y=qperh, fill=mix_lab)) +
     geom_col(position="dodge", width=0.7) +
     scale_fill_manual(values=MIX_COLS, name="Mix") +
-    labs(x=NULL, y="Q per GPU-h") +
+    labs(x=NULL, y="Q per GPU-s") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
-  # Panel d: always_grace dominant annotation table — mean Q vs cost for grace per mix
+  # Panel d: always-grace dominant annotation table — mean Q vs cost for grace per mix
   grace <- summ[summ$policy=="always-grace", c("mix","mix_lab","Q_mean","cost_mean")]
-  pd <- ggplot(grace, aes(x=cost_mean/3600, y=Q_mean, colour=mix_lab, label=mix_lab)) +
-    geom_point(size=3.5) + geom_text(vjust=-0.8, size=2.4, show.legend=FALSE) +
+  pd <- ggplot(grace, aes(x=cost_mean, y=Q_mean, colour=mix_lab, label=mix_lab)) +
+    geom_point(size=3.5) + geom_text(vjust=-0.9, size=2.2, show.legend=FALSE) +
     scale_colour_manual(values=MIX_COLS, name="Mix", guide="none") +
-    labs(x="Cost (GPU-h)", y="Quality Q (always\\_grace)") + pt +
-    ggtitle("always\\_grace operating point per mix")
+    scale_x_continuous(expand=expansion(mult=c(0.30,0.42))) +
+    scale_y_continuous(expand=expansion(mult=c(0.12,0.22))) +
+    labs(x="Cost (GPU-s)", y="Quality Q (always-grace)") + pt +
+    ggtitle("always-grace operating point per mix")
 
   fig <- wrap_plots(pa, pb, pc, pd, ncol=2) +
     plot_annotation(tag_levels="a") &
@@ -145,20 +158,28 @@ pt <- theme_minimal(base_size=8) +
     summarise(lift=mean(recall_lift,na.rm=TRUE),
               lift_sd=sd(recall_lift,na.rm=TRUE), .groups="drop")
 
-  pa <- ggplot(lift_df, aes(x=reorder(policy,-lift), y=lift, fill=mix_lab)) +
+  CEIL <- 10.0   # recall_lift is capped at 10x; most cells saturate the cap.
+  pa <- ggplot(lift_df, aes(x=policy, y=lift, fill=mix_lab)) +
     geom_col(position="dodge", width=0.7) +
     geom_hline(yintercept=1, linetype="dashed", colour="grey50", linewidth=0.4) +
+    geom_hline(yintercept=CEIL, linetype="dotted", colour="grey40", linewidth=0.4) +
+    annotate("text", x=1, y=CEIL, label="cap $10\\times$", hjust=0, vjust=-0.4,
+             size=2.2, colour="grey40") +
     scale_fill_manual(values=MIX_COLS, name="Mix") +
     labs(x=NULL, y="Damage recall lift") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
-  # Panel b: top-decile recall (using recall_at_decile as fallback if lift is 0)
-  top_df <- lift_df %>% arrange(desc(lift)) %>% head(15)
-  pb <- ggplot(top_df, aes(x=reorder(paste(policy,mix_lab,sep="/"),lift), y=lift,
+  # Panel b: only the below-cap cells -- the informative subset (everything else
+  # sits exactly at the 10x cap, so a "top-15" panel would be a flat wall).
+  below_df <- lift_df %>% filter(lift < CEIL - 1e-6) %>% arrange(lift)
+  if (nrow(below_df) == 0) below_df <- lift_df %>% arrange(lift) %>% head(6)
+  pb <- ggplot(below_df, aes(x=reorder(paste(policy,mix_lab,sep="/"),lift), y=lift,
                             fill=mix_lab)) +
     geom_col(width=0.7) + coord_flip() +
+    geom_hline(yintercept=CEIL, linetype="dotted", colour="grey40", linewidth=0.4) +
     scale_fill_manual(values=MIX_COLS, name="Mix", guide="none") +
-    labs(x=NULL, y="Recall lift (top 15)") + pt
+    labs(x=NULL, y="Recall lift (cells below the $10\\times$ cap)") + pt +
+    theme(axis.text.y=element_text(size=5.5))
 
   # Panel c: discovery CI (using lift_sd)
   pc <- ggplot(lift_df, aes(x=policy, y=lift, ymin=lift-lift_sd, ymax=lift+lift_sd,
@@ -193,44 +214,47 @@ pt <- theme_minimal(base_size=8) +
   cost_summary <- mix_all %>%
     filter(policy %in% c("always-edit","always-rag","always-grace","both","ft-merge","cost-only")) %>%
     group_by(mix, mix_lab, policy) %>%
-    summarise(cost_mean=mean(total_gpu_s,na.rm=TRUE)/3600,
-              cost_sd=sd(total_gpu_s,na.rm=TRUE)/3600,
+    summarise(cost_mean=mean(total_gpu_s,na.rm=TRUE),
+              cost_sd=sd(total_gpu_s,na.rm=TRUE),
               serve_mean=mean(serve_gpu_s,na.rm=TRUE), .groups="drop")
 
   pa <- ggplot(cost_summary, aes(x=policy, y=cost_mean, fill=mix_lab)) +
     geom_col(position="dodge", width=0.7) +
     scale_fill_manual(values=MIX_COLS, name="Mix") +
-    labs(x=NULL, y="Mean total GPU-h") +
+    labs(x=NULL, y="Mean total GPU-s") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
-  # Panel b: P2 ratio RAG/edit (measured serve_gpu_s)
-  pb <- ggplot(data.frame(arm=c("edit","rag"),
+  # Panel b: P2 ratio RAG/edit, converted from measured serve GPU-s to GPU-s.
+  pb <- ggplot(data.frame(arm=factor(c("edit","rag"), levels=c("edit","rag")),
                           mean_serve=c(0.01968005605823315, 0.12008187576736275),
                           n=c(534, 304)),
                aes(x=arm, y=mean_serve, fill=arm)) +
     geom_col(width=0.5) +
-    geom_text(aes(label=sprintf("%.3f", mean_serve)), vjust=-0.5, size=2.6) +
-    annotate("text", x=1.5, y=0.13,
+    geom_text(aes(label=sprintf("%.2g", mean_serve)), vjust=-0.5, size=2.6) +
+    annotate("text", x=1.5, y=0.155,
              label=sprintf("RAG/edit ratio = %.1f$\\times$", 0.12008187576736275/0.01968005605823315),
              size=2.5, parse=FALSE) +
     scale_fill_manual(values=c(edit="#FF7F0E", rag="#D62728"), guide="none") +
+    scale_y_continuous(expand=expansion(mult=c(0,0.28))) +
     labs(x="Arm", y="Mean serve GPU-s/query") + pt
 
-  # Panel c: per-policy cost breakdown — install vs serve GPU-s
+  # Panel c: per-policy serve-cost total in GPU-s (policy total across the stream,
+  # NOT per-query -- distinct estimand from panel b's per-query serve).
   bc_df <- mix_all %>% filter(policy %in% c("always-edit","always-rag","always-grace")) %>%
     group_by(mix, mix_lab, policy) %>%
     summarise(serve=mean(serve_gpu_s,na.rm=TRUE), .groups="drop")
   pc <- ggplot(bc_df, aes(x=policy, y=serve, fill=mix_lab)) +
     geom_col(position="dodge", width=0.7) +
     scale_fill_manual(values=MIX_COLS, name="Mix", guide="none") +
-    labs(x=NULL, y="Mean serve GPU-s/query") +
+    labs(x=NULL, y="Mean serve GPU-s (policy total)") +
     pt + theme(axis.text.x=element_text(angle=20,hjust=1,size=6.5))
 
-  # Panel d: 17× surprise bar (per-cell measured ratio averaged)
+  # Panel d: measured RAG/edit ratio.
   pd <- ggplot(data.frame(x="RAG/edit ratio", y=0.12008187576736275/0.01968005605823315),
                aes(x=x, y=y)) +
     geom_col(width=0.4, fill="#D62728") +
     geom_text(aes(label=sprintf("%.1f$\\times$", y)), vjust=-0.5, size=3) +
+    scale_y_continuous(expand=expansion(mult=c(0,0.18))) +
     labs(x=NULL, y="RAG/edit serve-cost ratio") + pt +
     theme(axis.text.x=element_text(size=7))
 
@@ -254,31 +278,33 @@ pt <- theme_minimal(base_size=8) +
               cost_hi=quantile(total_gpu_s,0.75,na.rm=TRUE), .groups="drop")
   summ$on_pareto <- summ$policy %in% c("always-grace","oracle","both")
 
-  pa <- ggplot(summ, aes(x=cost_mean/3600, y=Q_mean, colour=policy, shape=on_pareto)) +
+  pa <- ggplot(summ, aes(x=cost_mean, y=Q_mean, colour=policy, shape=on_pareto)) +
     geom_point(size=3) +
-    geom_text(aes(label=policy), size=2.0, vjust=-0.8, show.legend=FALSE) +
+    geom_text_repel(aes(label=policy), size=2.0, box.padding=0.25,
+                    point.padding=0.15, min.segment.length=0, max.overlaps=Inf,
+                    show.legend=FALSE) +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
     scale_shape_manual(values=c("TRUE"=17,"FALSE"=16), name="On Pareto") +
-    labs(x="Mean cost (GPU-h)", y="Mean Q") + pt
+    labs(x="Mean cost (GPU-s)", y="Mean Q") + pt
 
   # Panel b: zoom on Pareto front (always_grace / oracle / both)
   front <- summ %>% filter(on_pareto)
-  pb <- ggplot(front, aes(x=cost_mean/3600, y=Q_mean, colour=policy)) +
+  pb <- ggplot(front, aes(x=cost_mean, y=Q_mean, colour=policy)) +
     geom_point(size=3.5) +
     geom_errorbar(aes(ymin=Q_lo, ymax=Q_hi), width=0.04, linewidth=0.4) +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
-    labs(x="Mean cost (GPU-h)", y="Mean Q (IQR)") + pt
+    labs(x="Mean cost (GPU-s)", y="Mean Q (IQR)") + pt
 
   # Panel c: cost IQR
-  pc <- ggplot(summ, aes(x=reorder(policy,-cost_mean), y=cost_mean/3600,
-                          ymin=cost_lo/3600, ymax=cost_hi/3600, colour=policy)) +
+  pc <- ggplot(summ, aes(x=policy, y=cost_mean,
+                          ymin=cost_lo, ymax=cost_hi, colour=policy)) +
     geom_pointrange(size=0.4) +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
-    labs(x=NULL, y="Cost IQR (GPU-h)") +
+    labs(x=NULL, y="Cost IQR (GPU-s)") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
   # Panel d: Q IQR per policy
-  pd <- ggplot(summ, aes(x=reorder(policy,-Q_mean), y=Q_mean,
+  pd <- ggplot(summ, aes(x=policy, y=Q_mean,
                           ymin=Q_lo, ymax=Q_hi, colour=policy)) +
     geom_pointrange(size=0.4) +
     geom_hline(yintercept=summ$Q_mean[summ$policy=="random"], linetype="dashed",
@@ -304,26 +330,27 @@ pt <- theme_minimal(base_size=8) +
   t3_pass <- p2$overhead_delta > 0
   t4_pass <- p2$router_edit_majority_on_privacy > 0.5
   gates <- data.frame(
-    gate = factor(c("T1\nexposure\\_edit<rag", "T2\nfootprint>0", "T3\noverhead>0",
-                     "T4\nrouter\\_maj\\_privacy"),
-                  levels=c("T1\nexposure\\_edit<rag","T2\nfootprint>0","T3\noverhead>0",
-                           "T4\nrouter\\_maj\\_privacy")),
+    gate = factor(c("T1\nexposure$<$", "T2\nfootprint$>$0", "T3\noverhead$>$0",
+                     "T4\nrouter maj."),
+                  levels=c("T1\nexposure$<$","T2\nfootprint$>$0","T3\noverhead$>$0",
+                           "T4\nrouter maj.")),
     pass = c(t1_pass, t2_pass, t3_pass, t4_pass),
-    observed = c(sprintf("%.2f<%.2f", p2$exposure_edit, p2$exposure_rag),
+    observed = c(sprintf("%.2f$<$%.2f", p2$exposure_edit, p2$exposure_rag),
                   sprintf("%.0f", p2$footprint_delta),
                   sprintf("%.4f", p2$overhead_delta),
                   sprintf("%.3f", p2$router_edit_majority_on_privacy))
   )
 
-  pa <- ggplot(gates, aes(x=gate, y=pass, fill=pass)) +
+  pa <- ggplot(gates, aes(x=gate, y=as.numeric(pass), fill=pass)) +
     geom_col(width=0.5) +
-    geom_text(aes(label=ifelse(pass,"PASS","FAIL")), vjust=ifelse(gates$pass,-0.5,1.5),
-              size=3) +
-    geom_text(aes(label=observed), vjust=ifelse(gates$pass,1.5,-0.5), size=2.3, colour="grey30") +
+    geom_text(aes(label=ifelse(pass,"PASS","FAIL"),
+                  y=ifelse(pass,1.12,0.14)), size=2.8) +
+    geom_text(aes(label=observed, y=ifelse(pass,0.30,-0.09)),
+              size=1.8, colour="grey30") +
     scale_fill_manual(values=c("TRUE"="#2CA02C","FALSE"="#D62728"), guide="none") +
-    scale_y_continuous(limits=c(-0.1,1.4), breaks=c(0,1)) +
-    labs(x=NULL, y="Gate result (MIX\\_C)") + pt +
-    theme(axis.text.x=element_text(size=5.5))
+    scale_y_continuous(limits=c(-0.16,1.28), breaks=c(0,1)) +
+    labs(x=NULL, y="Gate result (privacy-tagged)") + pt +
+    theme(axis.text.x=element_text(size=5.5, lineheight=0.9))
 
   # Panel b: per-cell MIX_C provenance (counts)
   prov_df <- mc %>% group_by(mix, mix_lab) %>%
@@ -334,22 +361,24 @@ pt <- theme_minimal(base_size=8) +
     geom_text(aes(label=paste0("policies=", n_policies, "\nseeds=", n_seeds)),
               vjust=-0.4, size=2.6) +
     scale_fill_manual(values=MIX_COLS, guide="none") +
+    scale_y_continuous(expand=expansion(mult=c(0,0.25))) +
     labs(x=NULL, y="Cells landed") + pt
 
-  # Panel c: runner-stamp coverage
-  stamp_df <- data.frame(
-    bucket = c("post-2026-07-27\n(with stamp)", "pre-2026-07-27\n(legacy WARN)"),
-    count = c(0,0))
-  pb_stamps <- mc %>%
-    mutate(has_stamp = file.exists(file.path(CELLS_DIR, paste0(".", policy, ".stamp"))))
-  # Count stamp-eligible cells by mtime (proxy) — we don't have stamp file convention; skip
+  # Panel c: runner-stamp coverage, read directly from each canonical cell.
+  stamp_df <- mc %>%
+    count(has_runner_stamp, name="count") %>%
+    mutate(bucket=ifelse(has_runner_stamp, "validated\nrunner stamp", "legacy\n(no stamp)"))
+  stamp_df$bucket <- factor(stamp_df$bucket,
+                            levels=c("validated\nrunner stamp", "legacy\n(no stamp)"))
   pc <- ggplot(stamp_df, aes(x=bucket, y=count, fill=bucket)) +
     geom_col(width=0.5) +
-    scale_fill_manual(values=c("post-2026-07-27\n(with stamp)"="#2CA02C",
-                               "pre-2026-07-27\n(legacy WARN)"="#FF7F0E"), guide="none") +
-    labs(x=NULL, y="Cells") + pt +
+    geom_text(aes(label=count), vjust=-0.4, size=2.8) +
+    scale_fill_manual(values=c("validated\nrunner stamp"="#2CA02C",
+                               "legacy\n(no stamp)"="#FF7F0E"), guide="none") +
+    scale_y_continuous(expand=expansion(mult=c(0,0.16))) +
+    labs(x=NULL, y="privacy-tagged cells") + pt +
     theme(axis.text.x=element_text(size=6)) +
-    ggtitle("Provenance gate v2 — runner stamp\n(legacy WARN informational only)")
+    ggtitle("Runner-stamp status (validated vs legacy)")
 
   # Panel d: open question — why does T4 fail on MIX_C?
   pd <- ggplot(data.frame(x="T4 fail: router", y=p2$router_edit_majority_on_privacy),
@@ -358,7 +387,7 @@ pt <- theme_minimal(base_size=8) +
     geom_hline(yintercept=0.5, linetype="dashed", colour="grey50", linewidth=0.4) +
     annotate("text", x=1, y=0.55, label="gate floor=0.5", hjust=-0.2, size=2.5, colour="grey30") +
     geom_text(aes(label=sprintf("%.3f", y)), vjust=-0.5, size=3) +
-    labs(x=NULL, y="router\\_edit\\_majority\\_on\\_privacy (MIX\\_C)") + pt +
+    labs(x=NULL, y="router edit-majority on privacy (privacy-tagged)") + pt +
     theme(axis.text.x=element_text(size=7)) +
     coord_cartesian(ylim=c(0,0.7))
 
@@ -386,23 +415,22 @@ cat("Frame-A full figures complete.\n")
     pt + theme(axis.text.x=element_text(angle=20,hjust=1,size=6.5))
 
   pb <- ggplot(summ %>% filter(policy %in% c("always-rag","always-grace","always-edit")),
-               aes(x=policy, y=cost/3600, fill=mix_lab)) +
+               aes(x=policy, y=cost, fill=mix_lab)) +
     geom_boxplot(outlier.size=0.6, alpha=0.7) +
-    scale_fill_manual(values=MIX_COLS, name="Mix") +
-    labs(x=NULL, y="Total GPU-h") +
+    scale_fill_manual(values=MIX_COLS, guide="none") +
+    labs(x=NULL, y="Total GPU-s") +
     pt + theme(axis.text.x=element_text(angle=20,hjust=1,size=6.5))
 
   # Panel c: grace-optimal regions — when does always_grace beat always_rag AND always_edit?
   win <- mix_all %>% filter(policy %in% c("always-grace","always-rag","always-edit")) %>%
     group_by(mix, mix_lab, policy) %>%
     summarise(Q=mean(Q,na.rm=TRUE), cost=mean(total_gpu_s,na.rm=TRUE), .groups="drop")
-  pc <- ggplot(win, aes(x=cost/3600, y=Q, colour=policy, shape=mix_lab)) +
+  pc <- ggplot(win, aes(x=cost, y=Q, colour=policy, shape=mix_lab)) +
     geom_point(size=3) +
     scale_colour_manual(values=c("always-grace"="#1F77B4","always-rag"="#D62728","always-edit"="#FF7F0E"),
                         name="Policy") +
-    scale_shape_manual(values=c("MIX\\\\_A"=16,"MIX\\\\_B"=17,"MIX\\\\_C"=15), name="Mix",
-                       labels=c("MIX\\_A","MIX\\_B","MIX\\_C")) +
-    labs(x="Mean cost (GPU-h)", y="Mean Q") + pt +
+    scale_shape_manual(values=setNames(c(16,17,15), unname(MIX_PROSE)), name="Mix") +
+    labs(x="Mean cost (GPU-s)", y="Mean Q") + pt +
     theme(legend.position="right")
 
   # Panel d: edge cases — oracle vs cost_only collapse (full grid)
@@ -429,7 +457,7 @@ cat("Frame-A full figures complete.\n")
     summarise(exp_mean=mean(exposure,na.rm=TRUE), exp_sd=sd(exposure,na.rm=TRUE),
               Q_mean=mean(Q,na.rm=TRUE), cost_mean=mean(total_gpu_s,na.rm=TRUE), .groups="drop")
 
-  pa <- ggplot(gov_df, aes(x=reorder(policy,exp_mean), y=exp_mean,
+  pa <- ggplot(gov_df, aes(x=policy, y=exp_mean,
                             ymin=pmax(0,exp_mean-exp_sd), ymax=exp_mean+exp_sd, fill=mix_lab)) +
     geom_col(position="dodge", width=0.7) +
     geom_errorbar(position=position_dodge(width=0.7), width=0.2) +
@@ -441,11 +469,11 @@ cat("Frame-A full figures complete.\n")
   ref_rag <- gov_df$exp_mean[gov_df$policy == "always-rag" & gov_df$mix == "MIX_A"]
   if (length(ref_rag) == 0 || ref_rag == 0) ref_rag <- 1
   gov_df$rel_exp <- gov_df$exp_mean / ref_rag
-  pb <- ggplot(gov_df, aes(x=reorder(policy,rel_exp), y=rel_exp, fill=mix_lab)) +
+  pb <- ggplot(gov_df, aes(x=policy, y=rel_exp, fill=mix_lab)) +
     geom_col(position="dodge", width=0.7) +
     geom_hline(yintercept=1, linetype="dashed", colour="grey50", linewidth=0.4) +
     scale_fill_manual(values=MIX_COLS, name="Mix") +
-    labs(x=NULL, y="Exposure rel. to MIX\\_A always\\_rag") +
+    labs(x=NULL, y="Exposure rel. to steady always-rag") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
   # Panel c: per-mix footprint delta vs always-rag baseline
@@ -458,17 +486,18 @@ cat("Frame-A full figures complete.\n")
 
   # Panel d: always_rag contrast — full data mean Q/cost
   ar <- gov_df %>% filter(policy == "always-rag")
-  pd <- ggplot(ar, aes(x=cost_mean/3600, y=Q_mean, colour=mix_lab, label=mix_lab)) +
+  pd <- ggplot(ar, aes(x=cost_mean, y=Q_mean, colour=mix_lab, label=mix_lab)) +
     geom_point(size=3.5) + geom_text(vjust=-0.8, size=2.4, show.legend=FALSE) +
     scale_colour_manual(values=MIX_COLS, name="Mix", guide="none") +
-    labs(x="Cost (GPU-h)", y="Quality Q (always\\_rag)") + pt +
+    labs(x="Cost (GPU-s)", y="Quality Q (always\\_rag)") + pt +
     ggtitle("always\\_rag contrast across mixes")
 
   fig <- wrap_plots(pa, pb, pc, pd, ncol=2) +
     plot_annotation(tag_levels="a") &
     theme(plot.tag=element_text(face="bold",size=9), plot.tag.position=c(0.01,0.99))
   write_tex(fig, file.path(OUT_DIR, "figF10_governance.tex"),
-            "edit-harness/results/frame_a/cells/cell_*_real_MIX_{A,B,C}_*.json")
+            "edit-harness/results/frame_a/cells/cell_*_real_MIX_{A,B,C}_*.json",
+            height=3.8)
 }
 
 cat("Frame-A full figures complete.\n")
@@ -484,14 +513,16 @@ cat("Frame-A full figures complete.\n")
               cost_mean=mean(total_gpu_s,na.rm=TRUE), .groups="drop")
   summ$on_pareto <- summ$policy %in% c("always-grace","oracle","both")
 
-  pa <- ggplot(summ, aes(x=cost_mean/3600, y=Q_mean, colour=policy, shape=on_pareto)) +
+  pa <- ggplot(summ, aes(x=cost_mean, y=Q_mean, colour=policy, shape=on_pareto)) +
     geom_point(size=3) +
-    geom_text(aes(label=policy), size=2.0, vjust=-0.8, show.legend=FALSE) +
+    geom_text_repel(aes(label=policy), size=2.0, box.padding=0.25,
+                    point.padding=0.15, min.segment.length=0, max.overlaps=Inf,
+                    show.legend=FALSE) +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
     scale_shape_manual(values=c("TRUE"=17,"FALSE"=16), name="On Pareto") +
-    labs(x="Mean cost (GPU-h)", y="Mean Q") + pt
+    labs(x="Mean cost (GPU-s)", y="Mean Q") + pt
 
-  pb <- ggplot(summ, aes(x=reorder(policy,-Q_mean), y=Q_mean,
+  pb <- ggplot(summ, aes(x=policy, y=Q_mean,
                           ymin=Q_lo, ymax=Q_hi, colour=policy)) +
     geom_pointrange(size=0.4) +
     geom_hline(yintercept=summ$Q_mean[summ$policy=="random"], linetype="dashed",
@@ -500,20 +531,20 @@ cat("Frame-A full figures complete.\n")
     labs(x=NULL, y="Quality Q (IQR)") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
-  pc <- ggplot(summ, aes(x=reorder(policy,-cost_mean), y=cost_mean/3600,
+  pc <- ggplot(summ, aes(x=policy, y=cost_mean,
                           fill=policy)) +
     geom_col(width=0.7) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +
-    labs(x=NULL, y="Mean cost (GPU-h)") +
+    labs(x=NULL, y="Mean cost (GPU-s)") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
   pd <- ggplot(mb %>% filter(!is.na(recall_lift)) %>% group_by(policy) %>%
                summarise(lift=mean(recall_lift,na.rm=TRUE), .groups="drop"),
-               aes(x=reorder(policy,-lift), y=lift, fill=policy)) +
+               aes(x=policy, y=lift, fill=policy)) +
     geom_col(width=0.7) +
     geom_hline(yintercept=1, linetype="dashed", colour="grey50", linewidth=0.4) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +
-    labs(x=NULL, y="Damage recall lift (MIX\\_B)") +
+    labs(x=NULL, y="Damage recall lift (higher-churn)") +
     pt + theme(axis.text.x=element_text(angle=30,hjust=1,size=6))
 
   fig <- wrap_plots(pa, pb, pc, pd, ncol=2) +

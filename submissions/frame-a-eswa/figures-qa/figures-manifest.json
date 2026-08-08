@@ -1,0 +1,95 @@
+{
+  "count": 10,
+  "figures": [
+    {
+      "png": "figure-figF10_governance.png",
+      "bytes": 128675,
+      "sha256": "58a8e03523629ffb6aeb99460f56c6d88363dda13af545a2b2c3fc915da91a49",
+      "width": 1101,
+      "height": 772,
+      "nonwhite_fraction": 0.1055,
+      "blank": false
+    },
+    {
+      "png": "figure-figF1_routing_problem.png",
+      "bytes": 97578,
+      "sha256": "20f863b92b35dd6e089c1f354f21f4c358a4bf8cae7e2ae72637c6b80f1f5579",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.082072,
+      "blank": false
+    },
+    {
+      "png": "figure-figF2_pareto.png",
+      "bytes": 106911,
+      "sha256": "e1b1fc13b15a32401166817a87a14c779ab09a360f32e9375aaa1f2e645d890d",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.057907,
+      "blank": false
+    },
+    {
+      "png": "figure-figF3_predictor.png",
+      "bytes": 110590,
+      "sha256": "f7e9406921dd6d796bc22f12594d36109b3dfbbd1f7f29a8decb9095ec6a5af4",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.115118,
+      "blank": false
+    },
+    {
+      "png": "figure-figF4_gates.png",
+      "bytes": 73477,
+      "sha256": "f149b722cdece8741112fbae7060b0147ff1156a62b172b4a81ec8e71309ceae",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.176629,
+      "blank": false
+    },
+    {
+      "png": "figure-figF5_ragcost.png",
+      "bytes": 70597,
+      "sha256": "70fd6e7f5d79f3a7c0b4f3e3fb1d381f0dff480347c19409c981dbe012c8bf89",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.155851,
+      "blank": false
+    },
+    {
+      "png": "figure-figF6_steady_spread.png",
+      "bytes": 93830,
+      "sha256": "9928ad5a3374423522936264a831331060f4d348a019a5296fa4c65407027c60",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.111735,
+      "blank": false
+    },
+    {
+      "png": "figure-figF7_privacy_tagged.png",
+      "bytes": 94753,
+      "sha256": "fe14f6f72bbda960ce1bc2869396ce3b7348d49aaf525757052adaca87394f0e",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.044255,
+      "blank": false
+    },
+    {
+      "png": "figure-figF8_failure_modes.png",
+      "bytes": 83107,
+      "sha256": "1025868107b917dcc2b3bb9e40c6bdbab3b1615257685c0abb752044563c7b09",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.040598,
+      "blank": false
+    },
+    {
+      "png": "figure-figF9_higher_churn.png",
+      "bytes": 106141,
+      "sha256": "037a07bc2d6b70c9e6c156b401b882f8e1f9688ea745f2863a2a53c7cfad0708",
+      "width": 1101,
+      "height": 1012,
+      "nonwhite_fraction": 0.15978,
+      "blank": false
+    }
+  ]
+}

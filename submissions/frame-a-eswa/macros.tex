@@ -1,30 +1,32 @@
 % Number macros for the Frame-A manuscript — every value carries a provenance comment.
-% STATUS: FT-fix rerun complete 2026-07-21; full 99-cell wave-1 grid on disk; verdict
-% KILL on the preregistered gate (results/frame_a/frame_a_verdict_ftfix.json). The KILL is
-% reported in the manuscript, not buried; the macros below are the per-cell means and
-% the gate's CI-level sub-findings. MIX_B/MIX_C macros are NEW (2026-07-21) — measured
-% the same way as MIX_A.
+% STATUS 2026-08-07: full 99-cell wave-1 grid on disk; canonical analyzer
+% `results/frame_a/frame_a_verdict.json` emits VERDICT=KILL (P1=False, P2=False)
+% under --expect_model llama-3.2-1b --expect_provenance real. The KILL is reported
+% in the manuscript, not buried. Macros below are per-cell means and CI-level
+% sub-findings. MIX_B/MIX_C measured the same way as MIX_A.
+% REFRESH 2026-08-06: Q/cost means recomputed from the current 99 on-disk cells.
+% Gate direction UNCHANGED: measured DeltaQ(both - always_grace) = -0.016 on MIX_A.
 
 % ---- Q means over 3 orderings (seeds 0/1/2), MIX_A, llama-3.2-1b real harness.
 % SOURCE: edit-harness/results/frame_a/cells/cell_llama-3.2-1b_real_MIX_A_<policy>_s{0,1,2}.json
-% POST-FT-FIX means (2026-07-21 analyzer run on the 30 uncontaminated + 9 FT-fix rerun cells).
-\newcommand{\qBoth}{0.999}        % both (router): 0.9997/0.9993/0.9997 -> mean ~0.999
-\newcommand{\qGrace}{1.000}       % always_grace: 1.000 (deterministic codebook arm)
-\newcommand{\qEdit}{0.804}        % always_edit
+% (2026-08-06 recompute).
+\newcommand{\qBoth}{0.938}        % both (router): measured mean over 3 seeds
+\newcommand{\qGrace}{0.954}       % always_grace: measured mean over 3 seeds
+\newcommand{\qEdit}{0.827}        % always_edit
 \newcommand{\qRag}{0.604}         % always_rag
-\newcommand{\qCostOnly}{0.999}    % cost_only reduces to grace under measured cost table
-\newcommand{\qDamageOnly}{0.999}  % damage_only == both (lambda_cost = 0 selected on dev slice)
+\newcommand{\qCostOnly}{0.797}    % cost_only (measured)
+\newcommand{\qDamageOnly}{0.938}  % damage_only == both (lambda_cost = 0 selected on dev slice)
 \newcommand{\qOracle}{0.750}      % error-cost oracle (trades Q for cost by design)
-\newcommand{\qRandom}{0.766}      % random
-\newcommand{\qFloor}{0.300}       % always_ft / always_reject / ft_merge (Q = 0.3*A_loc only)
+\newcommand{\qRandom}{0.806}      % random
+\newcommand{\qFloor}{0.300}       % always_reject (Q = 0.3*A_loc only); always_ft 0.679, ft_merge 0.486
 
-% ---- total GPU-seconds (install + serve), mean over 3 seeds, same SOURCE.
+% ---- total GPU-seconds (install + serve), mean over 3 seeds, same SOURCE (2026-08-06 recompute).
 \newcommand{\cBoth}{224}
 \newcommand{\cGrace}{229}
 \newcommand{\cEdit}{225}
 \newcommand{\cRag}{187}
-\newcommand{\cCostOnly}{209}
-\newcommand{\cRandom}{88}
+\newcommand{\cCostOnly}{200}
+\newcommand{\cRandom}{93}
 \newcommand{\cFloor}{6}           % always_ft / always_reject / ft_merge (~5.5-6.6)
 
 % ---- P1 pairwise detail, frozen CI predicate (bootstrap over 3 orderings x query set).
@@ -55,21 +57,23 @@
 \newcommand{\ftFlushesObserved}{10}    % post-fix: FT arm now flushes as designed
 
 % ---- MIX_B operating points (means over 3 seeds; same SOURCE convention as MIX_A).
-% SOURCE: edit-harness/results/frame_a/cells/cell_llama-3.2-1b_real_MIX_B_<policy>_s{0,1,2}.json
-\newcommand{\qBothB}{0.999}        % both ties with always_grace within CI
-\newcommand{\qGraceB}{1.000}       % always_grace dominant in MIX_B as in MIX_A
-\newcommand{\qEditB}{0.804}        % always_edit
+% SOURCE: edit-harness/results/frame_a/cells/cell_llama-3.2-1b_real_MIX_B_<policy>_s{0,1,2}.json (2026-08-06 recompute).
+\newcommand{\qBothB}{0.885}        % both (router), MIX_B measured mean
+\newcommand{\qGraceB}{0.891}       % always_grace, MIX_B measured mean
+\newcommand{\qEditB}{0.837}        % always_edit
 \newcommand{\qRagB}{0.604}         % always_rag
 
 % ---- MIX_C operating points (means over 3 seeds; same SOURCE convention).
-% SOURCE: edit-harness/results/frame_a/cells/cell_llama-3.2-1b_real_MIX_C_<policy>_s{0,1,2}.json
-\newcommand{\qBothC}{0.999}        % both ties with always_grace within CI
-\newcommand{\qGraceC}{1.000}       % always_grace dominant in MIX_C as in MIX_A/B
-\newcommand{\qEditC}{0.829}        % always_edit
-\newcommand{\qRagC}{0.604}         % always_rag
+% SOURCE: edit-harness/results/frame_a/cells/cell_llama-3.2-1b_real_MIX_C_<policy>_s{0,1,2}.json (2026-08-06 recompute).
+\newcommand{\qBothC}{0.916}        % both (router), MIX_C measured mean
+\newcommand{\qGraceC}{0.937}       % always_grace, MIX_C measured mean
+\newcommand{\qEditC}{0.879}        % always_edit
+\newcommand{\qRagC}{0.601}         % always_rag
 
 % ---- P1 / P2 / P3 / P4 sub-findings (POST-FT-FIX, full 99-cell verdict).
-% SOURCE: results/frame_a/frame_a_verdict_ftfix.json (analyzer 2026-07-21).
+% SOURCE: P1/DeltaQ from results/frame_a/frame_a_verdict.json::per_mix (live canonical
+% values); P2 privacy majority from results/frame_a/cells/p2_llama-3.2-1b_real_MIX_C.json
+% (namespaced measured P2 cell). Synthetic contrast is results/frame_a/frame_a_verdict_synth.json.
 \newcommand{\pDeltaQeditA}{+0.112}              % both - always_edit, MIX_A CI [0.106, 0.117]
 \newcommand{\pDeltaQgraceA}{-0.016}             % both - always_grace, MIX_A CI [-0.041, -0.003] (FAIL)
 \newcommand{\pDeltaQgraceB}{-0.0001}            % MIX_B dQ vs always_grace (CI ~0, TIE)

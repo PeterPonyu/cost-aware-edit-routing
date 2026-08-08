@@ -4,7 +4,7 @@
 # Run from submissions/frame-a-eswa/
 
 suppressPackageStartupMessages({
-  library(jsonlite); library(ggplot2); library(dplyr); library(patchwork); library(tikzDevice)
+  library(jsonlite); library(ggplot2); library(ggrepel); library(dplyr); library(patchwork); library(tikzDevice)
 })
 
 HARNESS <- "../../edit-harness"
@@ -43,15 +43,16 @@ load_mix <- function(mix_name) {
 
 stopifnot(dir.exists(CELLS_DIR))
 mixa <- load_mix("MIX_A")
-mixa$policy <- gsub("_", "-", mixa$policy)  # LaTeX-safe labels
+POLICY_LEVELS <- c("oracle","always-grace","both","always-rag","always-edit","always-ft",
+                   "ft-merge","cost-only","damage-only","always-reject","random")
+mixa$policy <- factor(gsub("_", "-", mixa$policy), levels=POLICY_LEVELS)
 POLICY_COLS <- setNames(
   c("#2CA02C","#1F77B4","#AEC7E8","#D62728","#FF7F0E","#9467BD",
     "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF"),
-  c("oracle","always-grace","both","always-rag","always-edit","always-ft",
-    "ft-merge","cost-only","damage-only","always-reject","random")
+  POLICY_LEVELS
 )
 
-write_tex <- function(plot, path, source_json, width=6.5, height=5) {
+write_tex <- function(plot, path, source_json, width=5.40, height=5) {
   tikz(path, width=width, height=height, standAlone=FALSE)
   print(plot); dev.off()
   lines <- readLines(path, warn=FALSE)
@@ -78,26 +79,27 @@ pt <- theme_minimal(base_size=8) +
   # Panel a: Q × cost scatter (MIX_A operating points)
   pa <- ggplot(summ, aes(x=cost_mean, y=Q_mean, colour=policy, label=policy)) +
     geom_point(size=2.5, alpha=0.9) +
-    geom_text(size=2, vjust=-0.7, show.legend=FALSE) +
+    geom_text_repel(size=2, box.padding=0.25, point.padding=0.15,
+                    min.segment.length=0, max.overlaps=Inf, show.legend=FALSE) +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
     labs(x="Mean total GPU-s", y="Mean quality Q") + pt
 
   # Panel b: quality distribution per policy
-  pb <- ggplot(mixa, aes(x=reorder(policy,Q,median), y=Q, fill=policy)) +
+  pb <- ggplot(mixa, aes(x=policy, y=Q, fill=policy)) +
     geom_boxplot(outlier.size=0.8) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +
     labs(x=NULL, y="Quality Q") +
     pt + theme(axis.text.x=element_text(angle=30, hjust=1, size=6))
 
   # Panel c: cost distribution per policy
-  pc <- ggplot(mixa, aes(x=reorder(policy,total_gpu_s,median), y=total_gpu_s/3600, fill=policy)) +
+  pc <- ggplot(mixa, aes(x=policy, y=total_gpu_s, fill=policy)) +
     geom_boxplot(outlier.size=0.8) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +
-    labs(x=NULL, y="Total GPU-h") +
+    labs(x=NULL, y="Total GPU-s") +
     pt + theme(axis.text.x=element_text(angle=30, hjust=1, size=6))
 
   # Panel d: exposure surface mean per policy
-  pd <- ggplot(summ, aes(x=reorder(policy,exposure_mean), y=exposure_mean, fill=policy)) +
+  pd <- ggplot(summ, aes(x=policy, y=exposure_mean, fill=policy)) +
     geom_col(width=0.7) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +
     labs(x=NULL, y="Mean exposure surface") +
@@ -117,28 +119,30 @@ pt <- theme_minimal(base_size=8) +
     summarise(Q_mean=mean(Q,na.rm=TRUE), Q_lo=quantile(Q,0.25,na.rm=TRUE),
               Q_hi=quantile(Q,0.75,na.rm=TRUE),
               cost_mean=mean(total_gpu_s,na.rm=TRUE), .groups="drop")
-  summ$on_pareto <- summ$policy %in% c("always_grace","oracle","both")
+  summ$on_pareto <- summ$policy %in% c("always-grace","oracle","both")
 
-  pa <- ggplot(summ, aes(x=cost_mean/3600, y=Q_mean, colour=policy, shape=on_pareto)) +
+  pa <- ggplot(summ, aes(x=cost_mean, y=Q_mean, colour=policy, shape=on_pareto)) +
     geom_point(size=3) +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
     scale_shape_manual(values=c("TRUE"=17,"FALSE"=16), name="On Pareto") +
-    geom_text(aes(label=policy), size=1.9, vjust=-0.8, show.legend=FALSE) +
-    labs(x="Mean cost (GPU-h)", y="Mean quality Q") + pt
+    geom_text_repel(aes(label=policy), size=1.9, box.padding=0.25,
+                    point.padding=0.15, min.segment.length=0,
+                    max.overlaps=Inf, show.legend=FALSE) +
+    labs(x="Mean cost (GPU-s)", y="Mean quality Q") + pt
 
-  # Panel b: always_grace dominant position annotated
-  pb <- ggplot(summ, aes(x=cost_mean/3600, y=Q_mean)) +
+  # Panel b: always-grace dominant position annotated
+  pb <- ggplot(summ, aes(x=cost_mean, y=Q_mean)) +
     geom_point(aes(colour=policy), size=2.5) +
-    geom_point(data=summ[summ$policy=="always_grace",],
+    geom_point(data=summ[summ$policy=="always-grace",],
                colour="#1F77B4", size=4, shape=17) +
-    annotate("text", x=summ$cost_mean[summ$policy=="always_grace"]/3600,
-             y=summ$Q_mean[summ$policy=="always_grace"],
+    annotate("text", x=summ$cost_mean[summ$policy=="always-grace"],
+             y=summ$Q_mean[summ$policy=="always-grace"],
              label="always\\_grace", hjust=-0.15, size=2.5, colour="#1F77B4") +
     scale_colour_manual(values=POLICY_COLS, guide="none") +
-    labs(x="Mean cost (GPU-h)", y="Mean quality Q") + pt
+    labs(x="Mean cost (GPU-s)", y="Mean quality Q") + pt
 
   # Panel c: IQR bars per policy for Q
-  pc <- ggplot(summ, aes(x=reorder(policy,-Q_mean), y=Q_mean,
+  pc <- ggplot(summ, aes(x=policy, y=Q_mean,
                           ymin=Q_lo, ymax=Q_hi, colour=policy)) +
     geom_pointrange() +
     geom_hline(yintercept=summ$Q_mean[summ$policy=="random"], linetype="dashed",
@@ -151,7 +155,7 @@ pt <- theme_minimal(base_size=8) +
   lift_df <- mixa %>% filter(!is.na(recall_lift)) %>%
     group_by(policy) %>% summarise(lift=mean(recall_lift,na.rm=TRUE), .groups="drop")
   pd <- if (nrow(lift_df) > 0)
-    ggplot(lift_df, aes(x=reorder(policy,-lift), y=lift, fill=policy)) +
+    ggplot(lift_df, aes(x=policy, y=lift, fill=policy)) +
       geom_col(width=0.7) +
       geom_hline(yintercept=1, linetype="dashed", colour="grey50", linewidth=0.4) +
       scale_fill_manual(values=POLICY_COLS, guide="none") +
@@ -173,7 +177,7 @@ pt <- theme_minimal(base_size=8) +
               cost=mean(total_gpu_s,na.rm=TRUE), .groups="drop")
 
   # Panel a: edit arm failure — always_edit vs oracle quality
-  cmp_df <- summ[summ$policy %in% c("always_edit","oracle","always_grace","cost_only","damage_only"),]
+  cmp_df <- summ[summ$policy %in% c("always-edit","oracle","always-grace","cost-only","damage-only"),]
   pa <- ggplot(cmp_df, aes(x=policy, y=Q, fill=policy)) +
     geom_boxplot(outlier.size=0.8) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +
@@ -181,11 +185,11 @@ pt <- theme_minimal(base_size=8) +
     pt + theme(axis.text.x=element_text(angle=20,hjust=1,size=6.5))
 
   # Panel b: RAG arm cost comparison
-  rag_df <- summ[summ$policy %in% c("always_rag","always_grace","always_edit"),]
-  pb <- ggplot(rag_df, aes(x=policy, y=cost/3600, fill=policy)) +
+  rag_df <- summ[summ$policy %in% c("always-rag","always-grace","always-edit"),]
+  pb <- ggplot(rag_df, aes(x=policy, y=cost, fill=policy)) +
     geom_boxplot(outlier.size=0.8) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +
-    labs(x=NULL, y="Total GPU-h") +
+    labs(x=NULL, y="Total GPU-s") +
     pt + theme(axis.text.x=element_text(angle=20,hjust=1,size=6.5))
 
   # Panels c/d: PENDING — require gate v2 and Q_ext
@@ -210,7 +214,7 @@ pt <- theme_minimal(base_size=8) +
     summarise(exp_mean=mean(exposure,na.rm=TRUE), exp_sd=sd(exposure,na.rm=TRUE),
               Q_mean=mean(Q,na.rm=TRUE), cost_mean=mean(total_gpu_s,na.rm=TRUE), .groups="drop")
 
-  pa <- ggplot(gov_df, aes(x=reorder(policy,exp_mean), y=exp_mean,
+  pa <- ggplot(gov_df, aes(x=policy, y=exp_mean,
                             ymin=pmax(0,exp_mean-exp_sd), ymax=exp_mean+exp_sd, fill=policy)) +
     geom_col(width=0.7) +
     geom_errorbar(width=0.2) +
@@ -222,7 +226,7 @@ pt <- theme_minimal(base_size=8) +
   ref_rag <- gov_df$exp_mean[gov_df$policy == "always-rag"]
   if (length(ref_rag) == 0 || ref_rag == 0) ref_rag <- 1
   gov_df$rel_exp <- gov_df$exp_mean / ref_rag
-  pb <- ggplot(gov_df, aes(x=reorder(policy,rel_exp), y=rel_exp, fill=policy)) +
+  pb <- ggplot(gov_df, aes(x=policy, y=rel_exp, fill=policy)) +
     geom_col(width=0.7) +
     geom_hline(yintercept=1, linetype="dashed", colour="grey50", linewidth=0.4) +
     scale_fill_manual(values=POLICY_COLS, guide="none") +

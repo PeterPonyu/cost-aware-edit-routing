@@ -1,0 +1,572 @@
+% Frame-A manuscript — HONEST-STATE REVIEW DRAFT
+% STATUS 2026-08-06: 99/99 cells complete; prereg T4 gate router FAIL (0.103 < 0.5;
+% measured namespaced MIX_C P2 artifact, with synthetic contrast 0.170 < 0.5)
+% NOT SUBMISSION CANDIDATE — independent review incomplete
+% Compile: pdflatex main-honest-review (elsarticle.cls required).
+\documentclass[preprint,12pt]{elsarticle}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{tikz}
+\input{macros}
+\emergencystretch=3em
+\hfuzz=3pt
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.9}
+\renewcommand{\textfraction}{0.08}
+
+\journal{Expert Systems with Applications}
+
+\begin{document}
+
+\begin{frontmatter}
+
+\title{Cost-Aware Knowledge Maintenance: Routing Streaming Updates
+Across Editing, Retrieval, and Fine-Tuning Arms\\[0.5em]
+\mbox{\textcolor{red}{\scriptsize\bfseries [HONEST-STATE REVIEW DRAFT --- NOT SUBMISSION CANDIDATE]}}}
+
+\author[1]{Zeyu Fu}
+\affiliation[1]{organization={Independent Researcher}, country={China}}
+\ead{[email protected]}
+
+\begin{abstract}
+Deployed language models receive a stream of heterogeneous updates with distinct
+cost and risk profiles, yet the editing literature treats operation choice as fixed
+per paper and the routing decision as unstudied as a first-class object. We
+formalise knowledge maintenance as per-update routing across five operations
+(parametric edit, codebook patch, retrieval, batched fine-tune, reject) under an
+explicit error-cost objective and a measured-cost deployment model. We
+pre-register four predicates (Pareto dominance against every fixed strategy,
+structural edit-vs-rag superiority, cost-parity superiority over a
+LoRA-merge baseline, ablation superiority) and a mechanical PASS/GREY/KILL
+verdict rule, then measure all 99 cells of the preregistered wave-1 grid
+(3 stream configurations $\times$ 3 seeds $\times$ 11 policies) on a real 1B-class harness.
+The pre-registered gate returns \textbf{KILL} (the router does not
+Pareto-dominate the cheapest fixed strategy; measured $\Delta Q = -0.016$ against
+codebook-only on steady maintenance, ties within CI on the other two streams).
+The honest contribution is
+therefore \emph{measurement}, not improvement: a published Pareto frontier on
+which the codebook-only policy (`always\_grace') is the strongest measured fixed point
+($Q = 0.954$ steady / $0.891$ higher-churn / $0.937$ privacy-tagged, against the
+router's $0.938 / 0.885 / 0.916$), while the predictor's damage-risk ranking ($\rho = 0.725$ at L12,
+top-decile ceiling 0.4407 against 0.0993 chance) is a real, re-measurable
+moat. RAG's measured per-query serving cost is $\approx$6.1$\times$ the ROME
+parametric arm on the measured-store slice ($\approx$17$\times$ against the frozen
+synthetic anchor), contradicting the synthetic cost intuition. The router is
+competitive (within bootstrap-CI on quality-cost, strict on governance
+exposure) and ships with a full per-update audit trail. We report the KILL,
+not bury it.
+\end{abstract}
+
+\begin{keyword}
+knowledge editing \sep model maintenance \sep retrieval-augmented generation
+\sep continual learning \sep cost-aware routing
+\end{keyword}
+
+\end{frontmatter}
+
+% ================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Deployed language models in production systems receive a continuous stream of
+heterogeneous updates: fact corrections from external knowledge bases, preference
+adjustments from user feedback, privacy deletions required by regulatory compliance,
+and contextual adaptations to evolving domains. Each candidate maintenance operation
+(parametric editing, retrieval augmentation, fine-tuning, codebook patching) carries
+a distinct cost and risk profile in terms of GPU compute, serving latency, storage
+footprint, and governance exposure. Yet the literature treats operation choice as
+fixed per paper: editing papers always edit, RAG papers always retrieve, and the
+routing decision itself remains unstudied as a first-class optimization target.
+
+We formalize knowledge maintenance as per-update routing across five operations under
+an explicit error-cost objective and a measured-cost deployment model. Our central
+thesis: the choice of maintenance operation should be made per update by a cost-aware
+policy, and it is empirically measurable whether that policy Pareto-dominates every
+fixed strategy. We pre-register four predicates with mechanical decision criteria,
+freeze the gate before measuring any real cell, and report the verdict regardless of
+outcome.
+
+\textbf{Contributions.} (1) A routing framework that treats operation selection as
+an explicit decision variable, with measured install and serving costs for each arm.
+(2) A pre-registered, mechanically-computed gate with transparent failure conditions,
+applied uniformly to a 99-cell grid (3 stream configurations $\times$ 3 seeds
+$\times$ 11 policies). (3) Measurement evidence: the codebook-only strategy is the
+strongest measured fixed point on the Pareto frontier; the damage predictor achieves correlation $\rho = 0.725$; RAG's
+measured serving cost is approximately 6.1$\times$ the ROME parametric arm on the
+measured-store slice ($\approx$17$\times$ against the frozen synthetic anchor); the router verdict
+on pre-registered criteria is reported transparently.
+
+% ================================================================
+\section{Related Work}
+\label{sec:related}
+
+\textbf{Parametric knowledge editing.} Methods such as ROME, MEMIT, and AlphaEdit
+directly modify model weights to install factual updates. GRACE-class codebook
+methods maintain $\Delta W \equiv 0$ by construction, avoiding weight drift while
+achieving competitive efficacy. These approaches optimize for quality within the
+parametric arm but do not address the arm-selection decision.
+
+\textbf{Retrieval augmentation.} Non-parametric alternatives store facts in external
+indices and augment model inputs at query time. While avoiding parametric drift, RAG
+introduces serving latency, storage costs, and governance exposure from readable fact
+stores. The literature treats RAG as an alternative paradigm but rarely measures its
+cost structure against parametric methods in a unified framework.
+
+\textbf{Continual and batched fine-tuning.} Interval-based fine-tuning with LoRA
+adapters and task merging provides a batched maintenance path. Methods demonstrate
+large-scale knowledge injection, but the per-update routing decision between
+fine-tuning and other arms remains unaddressed.
+
+\textbf{Routing and mixture of operations.} Production serving systems increasingly
+employ mixture-of-experts and routing mechanisms, but focus on model selection rather
+than maintenance operation selection. Prior work optimizes \emph{inside} one arm; we
+optimize the \emph{choice} of arm under a declared cost model with pre-registered
+decision criteria.
+
+% ================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{The maintenance problem}
+A deployed model receives a stream of $N$ updates $u_1,\dots,u_N$, each a typed
+request (fact replacement, multi-hop implication, privacy/footprint-sensitive
+deletion, preference adjustment) with a serving hint. A maintainer must assign each
+update an operation and account for two quantities per update: \emph{quality}
+(retained accuracy on the updated knowledge, locality of side effects, cumulative
+retention) and \emph{cost} (GPU-seconds to install and to serve, persistent store
+footprint, exposure surface of any readable fact store).
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/fig01_routing_framework.pdf}
+\caption{Application-context routing framework for streamed knowledge maintenance.
+Each incoming update is characterised by measured diagnostic signals (update need,
+expected damage, resource cost, policy context); the cost/damage router selects one
+operation per update among five arms (parametric \emph{edit}, retrieval-augmented
+\emph{RAG}, \emph{fine-tune}, GRACE codebook \emph{grace}, and \emph{reject}). All arms
+are evaluated against a common scorecard of measured quality, cost, and governance
+indicators, and adjudication is performed by a frozen, pre-specified decision rule
+applied uniformly across arms. The framework specifies only the routing procedure
+and decision rule; no arm is preferred a priori.}
+\label{fig:routing-framework}
+\end{figure}
+
+\subsection{Five arms}
+\label{sec:arms}
+The router chooses among five operations per update:
+(i) \textbf{edit} — a rank-one parametric edit (ROME) at a pinned mid-depth layer;
+(ii) \textbf{grace} — a codebook patch with $\Delta W \equiv 0$ (no weight drift by
+construction);
+(iii) \textbf{rag} — write the fact to a retrieval store (no weight change; store is
+readable and grows with $N$);
+(iv) \textbf{ft} — queue for a batched interval-LoRA fine-tune, flushed every $K{=}50$
+updates and task-merged with $\lambda = 1/\sqrt{\#\text{merges}}$;
+(v) \textbf{reject} — decline the update (serves stale knowledge at zero install cost).
+Each arm carries a measured install cost (GPU-seconds), a measured per-query serving
+cost, and structural cost-model constants (store bytes, exposure surface).
+
+\subsection{The router and the measured Pareto frontier}
+\label{sec:router}
+The router is an interpretable expected-error-cost policy. Its per-update inputs are
+the update type, the serving hint, a geometry-derived pre-edit damage prediction
+(raw signed key-cosine, Llama-family L12 only --- see Limitations), and the arm cost
+table. Its single fitted degree of freedom is the cost/quality trade weight
+$\lambda_{\mathrm{cost}}$, selected by grid-minimizing total error cost on a
+record-disjoint dev slice over a frozen logarithmic grid (including $0$), then frozen
+for all scored streams. All other signals and thresholds are zero-parameter
+constants. Ablated variants (cost-only and damage-only) isolate the
+two signal axes; the full router combines both; fixed strategies and a uniform
+random policy are the baselines; an error-cost oracle (access to
+ground-truth damage) brackets attainable performance.
+
+\textbf{Honest scope.} The router is the measurement instrument for the
+Pareto-frontier claim; it is not assumed to Pareto-dominate.
+The preregistered verdict rule (Sec.~\ref{sec:gate}) returns PASS/GREY/KILL
+mechanically from the measured grid; the contribution of the paper is the
+\emph{measurement}, regardless of verdict. The frozen cost anchor in the
+router configuration is the initial cost table; the measurement harness re-measures
+per-arm serving cost on the live model. The analysis records the
+measured-vs-synthetic ratios.
+The router uses the \emph{measured} cost table when scoring; the verdict is
+what the measured data supports, not what the synthetic anchor predicted.
+
+\textbf{Decision integration with quant-survival ratios.} Per-edit failure
+probabilities also inform the companion quant-survival analysis. That analysis is
+separately preregistered and reproduced in the Track-1 grid. Routing uses raw
+geometry; deployment-side INT8/NF4 survival is measured at the same layer. We use
+those survival ratios only when sizing the edit arm in the long-term cost model;
+the routing framework and its verdict remain self-contained.
+
+\subsection{Quality and cost accounting}
+\label{sec:metrics}
+Per stream instance we report $Q = 0.4\,A_{\mathrm{upd}} + 0.3\,A_{\mathrm{loc}} +
+0.3\,A_{\mathrm{cum}}$ (update efficacy, locality, cumulative retention; ripple
+correctness reported separately) and total GPU-seconds (install + measured serving).
+Aggregation across the 3 stream orderings is by mean with seed-level bootstrap 95\%
+CIs; policy $A$ Pareto-dominates $B$ iff $Q(A) \ge Q(B)$ and
+$\mathrm{cost}(A) \le \mathrm{cost}(B)$ with at least one strict, both adjudicated
+at the CI level. Damage-discovery ability is reported as recall@decile with lift
+against chance, CI-only whenever the ground-truth damaging set is below the
+pre-registered power floor ($n{<}50$); no AUROC, no separation claims.
+
+\subsection{The frozen gate}
+\label{sec:gate}
+The claim is decided by four predictions frozen before any real cell:
+\textbf{K\_A} (Pareto; alias P1) — the router Pareto-dominates-or-matches-then-undercuts every
+fixed strategy and random in $\ge 2$ of 3 stream configurations;
+\textbf{K\_A$'$} (structural, privacy-tagged configuration only; alias P2) — edit beats rag on exposure/footprint/serving
+overhead AND the router selects edit for the majority of privacy-tagged updates;
+\textbf{P3} — the router beats the pinned interval-LoRA-merge baseline under
+cost-parity operationalized both ways in $\ge 2$ of 3 stream configurations;
+\textbf{P4} — the router beats each single-signal ablation in $\ge 1$ configuration each.
+Verdict: PASS = K\_A $\wedge$ K\_A$'$ (i.e.\ P1 $\wedge$ P2); KILL = $\neg$K\_A $\wedge$ $\neg$K\_A$'$; GREY otherwise.
+P3/P4 sharpen but do not pivot. The verdict is emitted mechanically by a fixed
+script from the on-disk grid; a partial grid yields INCOMPLETE by construction.
+
+% ================================================================
+\section{Experimental Setup}
+\label{sec:setup}
+
+\textbf{Harness.} Real-model wave-1 harness on a single consumer GPU; every cell
+replays a 500-update stream on the live model with measured install/serving costs;
+the model is restored to a base snapshot between cells (checksummed). Integrity
+asserts fire inside the run: (c) installed $\Delta W$ is rank-one with parity and
+norm match; (d) the live geometry predictor agrees with the stream's stored values
+on the pristine prefix. A 5-update smoke stream gates every launch.
+\textbf{Model.} Llama-3.2-1B (Llama-family slice; cross-family claims deferred).
+\textbf{Grid.} 3 stream configurations $\times$ 3 orderings $\times$ 11 policies $=$ 99 cells.
+\textbf{Streams.} Steady maintenance = low churn (designed damaging
+fraction $\approx 0.10$, realized $35/500 \approx 0.07$ after filtering); higher-churn maintenance =
+higher churn (damaging $\approx 0.30$, higher discovery power); privacy/footprint-tagged maintenance =
+privacy/footprint-tagged load (carries the structural P2).
+
+% ================================================================
+\section{Results}
+\label{sec:results}
+
+\textbf{Honest opening.} The pre-registered frozen gate (Sec.~\ref{sec:gate})
+returns \textbf{KILL} on the full 99-cell wave-1 grid (3 stream configurations $\times$ 3 seeds
+$\times$ 11 policies, all measured on the real 1B-class harness). The KILL is reported,
+not buried. The on-disk canonical analyzer
+(\texttt{frame\_a\_verdict.json}, re-run 2026-08-07 against the complete real grid)
+emits the same \texttt{VERDICT:KILL} ($P1{=}F$, $P2{=}F$). Per-cell operating points were
+refreshed from the current cells on 2026-08-06. The contribution of the paper is therefore the
+\emph{measurement} of the Pareto frontier, not a winning router; the
+quantitative sub-findings that are publishable independently of the gate verdict
+are listed in Sec.~\ref{sec:gate}.
+
+\subsection{Measured operating points across stream configurations}
+\begin{table}[t]
+\centering
+\caption{Measured operating points on the cost-aware Pareto frontier. $Q$ and total
+GPU-seconds are means over 3 seeds per cell; full bootstrap-CI tables in the measurement
+artifacts. Cells are written atomically by the harness and are re-runnable
+end-to-end. The router is within bootstrap-CI of
+the codebook-only policy on $(Q, \text{cost})$ in higher-churn streams and strictly behind on
+$Q$ in steady maintenance by $\Delta Q = -0.016$ (CI excludes $0$).}
+\label{tab:steady}
+\begin{tabular}{lcc}
+\toprule
+Policy & $Q$ & GPU-s \\
+\midrule
+oracle        & \qOracle     & 155 \\
+router (full) & \qBoth       & \cBoth \\
+damage-only   & \qDamageOnly & \cBoth \\
+cost-only     & \qCostOnly   & \cCostOnly \\
+edit-only     & \qEdit       & \cEdit \\
+codebook-only & \qGrace      & \cGrace \\
+rag-only      & \qRag        & \cRag \\
+ft-only       & 0.679        & \cFloor \\
+reject-only   & \qFloor      & \cFloor \\
+ft-merge      & 0.486        & \cFloor \\
+random        & \qRandom     & \cRandom \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\input{figures-review-src/figF2_pareto.tex}
+\caption{Measured operating points ($Q$ vs.\ total GPU-seconds) for all policies on
+steady maintenance / higher-churn maintenance / privacy/footprint-tagged maintenance. Pareto plot regenerated from canonical measurement artifacts.}
+\label{fig:pareto}
+\end{figure}
+
+Table~\ref{tab:steady} lists the steady maintenance operating points. The router behaves as a
+codebook-dominated blend (\routerGraceShare/\,500 updates to the codebook arm,
+\routerEditShare/\,500 to ROME at seed 0; $\lambda_{\mathrm{cost}} = \lambdaCost$
+selected on the dev slice, hence the full router reduces to damage-only).
+Its routed ROME edits purchase no measurable efficacy over the codebook arm while
+costing locality ($Q$ \qBoth{} vs.\ \qGrace{}); under the frozen CI predicate the
+router strictly loses to codebook-only on steady maintenance and ties within CI on
+higher-churn streams. The ties in higher-churn streams are the more general result --- under the measured
+serving cost, codebook-only is on the Pareto frontier and the router is competitive,
+not dominant.
+
+\begin{figure}[t]
+\centering
+\input{figures-review-src/figF1_routing_problem.tex}
+\caption{Router arm-selection counts (ROME vs.\ GRACE vs.\ RAG vs.\ FT) across stream configurations.
+Routing-share figure regenerated from canonical measurement artifacts.}
+\label{fig:router}
+\end{figure}
+
+\subsection{Damage discovery (predictor moat)}
+\begin{figure}[t]
+\centering
+\input{figures-review-src/figF3_predictor.tex}
+\caption{Damage-discovery recall@decile lift across stream configurations. Figure regenerated from canonical measurement artifacts.}
+\label{fig:discovery}
+\end{figure}
+On steady maintenance the recall@decile bootstrap CI is $[1.0, 1.0]$ (lift \discLift$\times$
+vs.\ chance; \discCeil{} measured predictor ceiling). $n = \discN < 50$: per the
+pre-registered power floor we report the CI only and make no point claim. On
+higher-churn maintenance ($n{=}60$) and privacy/footprint-tagged maintenance ($n{=}52$) the same CI $[1.0, 1.0]$ holds at the
+$n \ge 50$ floor and the predictor's discovery claim becomes point-allowed. The
+predictor ($\rho = 0.725$ at L12; top-decile ceiling 0.4407 vs.\ 0.0993 chance) is
+\emph{real} and re-measurable; the gate verdict's KILL is about the
+\emph{router's translation} of that predictor into a Pareto-dominant policy, not
+about the predictor itself.
+
+\subsection{Measured-vs-synthetic cost surprise (RAG)}
+\begin{table}[t]
+\centering
+\caption{Measured per-arm serving cost (GPU-s per query, 500-update stream) divided
+by the frozen synthetic anchor. RAG's measured cost is $\approx$17$\times$ the
+parametric arms; the synthetic anchor under-estimated this gap by an order of
+magnitude. Values are computed from the measured-cost ratio fields in the
+current analysis artifact.}
+\label{tab:costratio}
+\small
+\begin{tabular}{lrr}
+\toprule
+Arm & measured / synthetic & n queries \\
+\midrule
+edit   & \cratioEdit   & \nqEdit   \\
+ft     & \cratioFt     & \nqFt     \\
+grace  & \cratioGrace  & \nqGrace  \\
+rag    & \cratioRag    & \nqRag    \\
+reject & \cratioReject & \nqReject \\
+\bottomrule
+\end{tabular}
+\end{table}
+This is the load-bearing cost-model finding: the synthetic anchor assumed RAG and
+parametric arms sit within a 1.6$\times$ envelope; the measured envelope is closer
+to 17$\times$. The router uses the measured table when scoring, so the verdict
+reflects deployment reality, not the anchor. Operators who relied on the synthetic
+intuition (RAG-as-cheap-alternative) should re-budget.
+
+\subsection{Gate status --- KILL, reported}
+\begin{table}[t]
+\centering
+\caption{Frozen-gate status on the full 99-cell wave-1 grid. The verdict rule
+(PASS = K\_A $\wedge$ K\_A$'$; KILL = $\neg$K\_A $\wedge$ $\neg$K\_A$'$; GREY otherwise)
+returns KILL. The KILL is the paper-level claim; the rows below are the
+mechanical sub-findings.}
+\label{tab:gate}
+\footnotesize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{2.4cm}>{\raggedright\arraybackslash}p{2.4cm}>{\raggedright\arraybackslash}p{1.8cm}>{\raggedright\arraybackslash}p{3.2cm}l}
+\toprule
+Prediction & Steady & Higher-churn & Privacy-tagged & Verdict \\
+\midrule
+$K_A$ / P1 & fails ($\Delta Q$ \pDeltaQgraceA{}) & tied ($\Delta Q$ \pDeltaQgraceB{}) & tied ($\Delta Q$ \pDeltaQgraceC{}) & FAIL \\
+$K_A'$ / P2 & n/a & n/a & structural fail & FAIL \\
+P3 (FT merge) & PASS (strict Q) & FAIL & FAIL & FAIL (1/3) \\
+P4 (ablations) & not met & not met & not met & FAIL \\
+\midrule
+Verdict            & \multicolumn{4}{l}{\textbf{KILL} --- reported, not buried$^{\dagger}$} \\
+\bottomrule
+\end{tabular}%
+}
+{\footnotesize $^{\dagger}$Canonical analyzer output on the complete 99-cell real grid
+(\texttt{frame\_a\_verdict.json}): \texttt{VERDICT:KILL}. See Sec.~\ref{sec:limitations}.\par}
+\end{table}
+
+{\footnotesize
+\noindent\textbf{Verdict detail.} KILL on the preregistered rule. The mechanical
+sub-findings below the gate are \emph{still publishable} and constitute the
+measurement contribution:
+\begin{itemize}
+\item \textbf{Predictor moat.} Per-edit within-cell Spearman $\rho = 0.725$ at L12
+(held-out clean), top-decile recall ceiling 0.4407 vs.\ chance 0.0993. Discovery CI
+$[1.0, 1.0]$ at mean lift \discLift$\times$ on higher-churn and privacy-tagged configurations ($n \ge 50$, point-allowed)
+and steady maintenance ($n = 35 < 50$, CI-only).
+\item \textbf{Codebook-only on the frontier.} The codebook-only policy ($Q = 0.954$ steady /
+$0.891$ higher-churn / $0.937$ privacy-tagged,
+install $\approx 250$ GPU-s for 500 updates, total $\approx 2.7$k GPU-s) lies on
+the Pareto frontier in all three stream configurations and is the strongest measured
+fixed strategy.
+\item \textbf{RAG cost surprise.} Measured RAG/edit serve cost is $\approx$6.1$\times$
+on the measured-store slice ($\approx$17$\times$ against the frozen synthetic anchor;
+Table~\ref{tab:costratio}); the synthetic anchor under-budgeted this
+by an order of magnitude.
+\item \textbf{Governance.} Router's exposure surface (edit 0.0 / grace 0.3 / rag 1.0)
+is strictly below rag-only ($1.0$) on every stream configuration; the router has a real
+governance footprint even when the Pareto verdict is KILL.
+\end{itemize}
+The separate OLS in-sample fit at L12 returns $0.784$ but is not the headline
+model. We do \emph{not} claim Pareto dominance; the measured table is the result,
+not a placeholder.
+\par}
+
+\begin{figure}[t]
+\centering
+\input{figures-review-src/figF4_gates.tex}
+\caption{Pre-registered gate-status summary across stream configurations. Figure regenerated from canonical measurement artifacts.}
+\label{fig:gatestatus}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\input{figures-review-src/figF9_higher_churn.tex}
+\caption{Higher-churn maintenance operating points ($Q$ vs.\ cost) for all policies. Figure regenerated from canonical measurement artifacts.}
+\label{fig:higher-churn}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\input{figures-review-src/figF7_privacy_tagged.tex}
+\caption{Privacy/footprint-tagged maintenance structural breakdown and edit-vs-RAG selection
+share. Figure regenerated from canonical measurement artifacts.}
+\label{fig:privacy-tagged}
+\end{figure}
+
+% ================================================================
+\section{Limitations}
+\label{sec:limitations}
+(1) \textbf{KILL is reported, not buried.} The preregistered gate verdict on the
+full 99-cell wave-1 grid is KILL; the router does not Pareto-dominate every fixed
+strategy in $\ge 2$ of 3 stream configurations. The paper's contribution is the measurement of the
+Pareto frontier, the predictor moat, the RAG cost surprise, and the governance
+exposure, not a winning router. The canonical analyzer artifact
+\texttt{frame\_a\_verdict.json} now emits the same \texttt{VERDICT:KILL} on the complete
+real grid (re-analysis 2026-08-07; an earlier July partial-wave run had correctly refused
+with \texttt{INCOMPLETE}). Provenance gate v2 validates cell schema and write integrity;
+its P2 predicate majority check is scored by the frozen gate (measured T4 fraction
+$0.103{<}0.5$), not by inventing a PASS fraction. (2) Wave-1 is the Llama-family 1B slice only;
+cross-family behavior (including known sign inversions off Llama) is out of scope
+and requires recalibration, never extrapolation. (3) The geometry signal is L12-only;
+the L14 lift is norm-growth-carried (geometry inert at L14) and is not claimed
+as a predictor feature here or anywhere. (3b) \textbf{Shared evidence base,
+disclosed.} The damage-risk predictor this paper routes on ($\rho = 0.725$ at
+L12, held-out clean) is measured on CounterFact (edit, probe) matrices
+produced by the same harness and the same base checkpoint as a companion
+mechanism study under review elsewhere (key-geometry prediction of
+locate-then-edit collateral damage). The two papers ask different questions of
+that shared measurement layer --- the companion establishes that key geometry
+\emph{predicts} edit damage; this paper measures whether an operator can
+\emph{act} on it under a cost model --- and no number, table, or figure is
+reused between them. Should the venues require it, the predictor can be
+re-derived on this paper's own stream at the cost of one additional wave; we
+report the shared provenance rather than silently double-dipping the evidence
+base. (4) The router uses the measured cost
+table when scoring; the synthetic cost anchor under-budgeted RAG by an order of
+magnitude and this measurement is one of the paper's findings. (5) Discovery
+claims are CI-only at steady maintenance's $n = 35 < 50$ power floor; higher-churn and privacy-tagged configurations ($n \ge 50$)
+are point-allowed. (6) The rerun completed 2026-07-21; the dead-arm
+detector reports zero contaminated cells post-rerun. (7) The higher-churn and privacy-tagged cells on
+disk were measured under the same harness with the FT-arm fix in place; their
+measured numbers (Q, cost, discovery) are the input to the verdict, not
+synthetic-cost placeholders. (8) The router's competitive-but-not-dominant
+position vs codebook-only means the contribution is descriptive of the
+operator's actual decision space; the operator who already uses codebook-style
+methods (GRACE-class) is on the measured Pareto frontier and the gap to smart
+routing is within bootstrap-CI noise. (9) Cross-family extension (Llama-3B /
+Qwen-1.5B / etc.) and a Track-2 deployment case study (one concrete RAG-vs-edit
+scenario with measured cost) are explicit future work, not gaps to fill before
+review.
+
+% ================================================================
+\appendix
+\section{Visual Atlas}
+\label{app:visual}
+
+This appendix provides additional visualizations of the measurement grid and router
+behavior across the three stream configurations.
+
+\begin{figure}[!ht]
+\centering
+\input{figures-review-src/figF5_ragcost.tex}
+\caption{RAG cost surprise visualization. Panel annotation: measured RAG/edit
+serve ratio $=6.1\times$ on the measured-store slice. Against the frozen synthetic
+anchor the same contrast is $\approx$17$\times$ (Table~\ref{tab:costratio}); the
+anchor under-estimated the gap by an order of magnitude.}
+\label{fig:ragcost-app}
+\end{figure}
+
+\begin{figure}[!ht]
+\centering
+\input{figures-review-src/figF6_steady_spread.tex}
+\caption{Quality-cost distribution for steady maintenance stream showing all policy
+operating points with bootstrap confidence intervals. The codebook-only policy
+achieves maximum quality at competitive cost.}
+\label{fig:steady-spread-app}
+\end{figure}
+
+\begin{figure}[!ht]
+\centering
+\input{figures-review-src/figF8_failure_modes.tex}
+\caption{Quality and cost distributions across stream configurations. Panels (a)/(b)
+show per-seed quality $Q$ and total GPU-s for the edit-arm policy families; panels
+(c)/(d) contrast the always-grace / always-rag / always-edit operating points and the
+edge policies. The codebook (always-grace) policy sits at the top of the quality
+distribution at competitive cost.}
+\label{fig:failure-modes-app}
+\end{figure}
+
+\begin{figure}[!ht]
+\centering
+\input{figures-review-src/figF10_governance.tex}
+\caption{Governance exposure surface comparison across policies. The router achieves
+lower exposure than rag-only (0.3 vs.\ 1.0) by routing privacy-sensitive updates to
+parametric or codebook arms.}
+\label{fig:governance-app}
+\end{figure}
+
+% ================================================================
+\section*{Declaration of generative AI and AI-assisted technologies in the writing process}
+
+During the preparation of this work, the authors used AI-assisted tools for code
+development, experimental workflow orchestration, and manuscript drafting assistance.
+All AI-generated content was subsequently verified, edited, and approved by the
+authors. The authors take full responsibility for the content of the publication.
+
+\section*{Reproducibility}
+
+The measurement harness, frozen gate script, and grid layout are available in the
+project repository. Each cell is written atomically and is re-runnable end-to-end with
+checksummed model restoration between cells. A 5-update smoke stream gates every
+launch. The pre-registered gate verdict is computed mechanically from measured cells
+by a fixed script. All figures are generated from canonical measurement artifacts with
+full provenance tracking.
+
+\bibliographystyle{elsarticle-num}
+\begin{thebibliography}{10}
+
+% Representative real sources for the three research lines cited in Related Work.
+% (The body text does not use \cite; these are the canonical references for the
+% editing / retrieval / continual-learning lines the framework is positioned against.)
+\bibitem{ref1}
+Meng, K., Bau, D., Andonian, A., Belinkov, Y. Locating and editing factual
+associations in GPT. \emph{Advances in Neural Information Processing Systems}
+(NeurIPS), 2022.
+
+\bibitem{ref2}
+Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., K\"uttler, H.,
+Lewis, M., Yih, W., Rockt\"aschel, T., Riedel, S., Kiela, D. Retrieval-augmented
+generation for knowledge-intensive NLP tasks. \emph{Advances in Neural Information
+Processing Systems} (NeurIPS), 2020.
+
+\bibitem{ref3}
+Hu, E.~J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., Chen, W.
+LoRA: Low-rank adaptation of large language models. \emph{International Conference on
+Learning Representations} (ICLR), 2022.
+
+\end{thebibliography}
+
+\end{document}
